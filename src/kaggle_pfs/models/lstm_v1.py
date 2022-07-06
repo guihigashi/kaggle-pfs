@@ -162,7 +162,8 @@ def main(epochs, batch_size):
 
     # dataloader
     train_dataloader = SalesDataloader(
-        device, DataLoader(train_dataset, batch_size=batch_size, pin_memory=True)
+        device,
+        DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True),
     )
     val_dataloader = SalesDataloader(
         device, DataLoader(test_dataset, batch_size=batch_size, pin_memory=True)
