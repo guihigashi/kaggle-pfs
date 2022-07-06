@@ -211,7 +211,9 @@ def main(epochs, batch_size):
 
     # add_graph() will trace the sample input through your model,
     # and render it as a graph.
-    writer.add_graph(model, xb)
+    if xb is not None and isinstance(xb, torch.Tensor):
+        writer.add_graph(model, xb)
+
     writer.flush()
 
     # Upload the TensorBoard event logs as a run artifact
