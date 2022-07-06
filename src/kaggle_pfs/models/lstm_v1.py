@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from dotenv import load_dotenv
 from torch import optim
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset
 from torch.utils.tensorboard import SummaryWriter
 
 from kaggle_pfs.data import readers
@@ -126,16 +126,11 @@ def write_2d_embedding_weights(emb, name, epoch):
     help="Number of epochs to fit the model",
 )
 @click.option(
-    "--train_split",
-    default=0.75,
-    help="Fraction of data in the trainning set",
-)
-@click.option(
     "--batch_size",
     default=128,
     help="Number of row in each batch size",
 )
-def main(epochs, train_split, batch_size):
+def main(epochs, batch_size):
     load_dotenv()
 
     run = mlflow.start_run()
@@ -143,7 +138,6 @@ def main(epochs, train_split, batch_size):
     mlflow.log_params(
         {
             "epochs": epochs,
-            "train_split": train_split,
             "batch_size": batch_size,
         }
     )
@@ -162,12 +156,9 @@ def main(epochs, train_split, batch_size):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # get dataset
-    dataset = SalesDataset(readers.items_by_month())
-
-    # split dateset
-    n_train = int(len(dataset) * train_split)
-    n_test = len(dataset) - n_train
-    train_dataset, test_dataset = random_split(dataset, [n_train, n_test])
+    df = readers.items_by_month()
+    train_dataset = SalesDataset(df, begin_month=0, end_month=31, target_month=32)
+    test_dataset = SalesDataset(df, begin_month=1, end_month=32, target_month=33)
 
     # dataloader
     train_dataloader = SalesDataloader(
