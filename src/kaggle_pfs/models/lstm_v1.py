@@ -138,111 +138,111 @@ def write_2d_embedding_weights(emb, name, epoch):
 def main(epochs, train_split, batch_size):
     load_dotenv()
 
-    with mlflow.start_run() as run:
-        mlflow.log_params(
-            {
-                "epochs": epochs,
-                "train_split": train_split,
-                "batch_size": batch_size,
-            }
+    run = mlflow.start_run()
+
+    mlflow.log_params(
+        {
+            "epochs": epochs,
+            "train_split": train_split,
+            "batch_size": batch_size,
+        }
+    )
+
+    output_dir = tempfile.mkdtemp()
+    writer = SummaryWriter(log_dir=output_dir)
+    print(f"Writing TensorBoard events locally to: {output_dir}")
+
+    def write_scalars(metrics, epoch):
+        writer.add_scalars(
+            main_tag=run.info.run_id, tag_scalar_dict=metrics, global_step=epoch
         )
+        mlflow.log_metrics(metrics=metrics, step=epoch)
 
-        output_dir = tempfile.mkdtemp()
-        writer = SummaryWriter(log_dir=output_dir)
-        print(f"Writing TensorBoard events locally to: {output_dir}")
+    # training config
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        def write_scalars(metrics, epoch):
-            writer.add_scalars(
-                main_tag=run.info.run_id, tag_scalar_dict=metrics, global_step=epoch
+    # get dataset
+    dataset = SalesDataset(readers.items_by_month())
+
+    # split dateset
+    n_train = int(len(dataset) * train_split)
+    n_test = len(dataset) - n_train
+    train_dataset, test_dataset = random_split(dataset, [n_train, n_test])
+
+    # dataloader
+    train_dataloader = SalesDataloader(
+        device, DataLoader(train_dataset, batch_size=batch_size, pin_memory=True)
+    )
+    val_dataloader = SalesDataloader(
+        device, DataLoader(test_dataset, batch_size=batch_size, pin_memory=True)
+    )
+
+    # get network
+    model = Network(
+        shop_embedding_dim=2,
+        item_embedding_dim=2,
+        hidden_dim=6,
+        dense_dim=6,
+    ).to(device)
+
+    # get optimizer and link with network params
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+    # train loop
+    for epoch in range(epochs):
+        model.train()
+        for i, (xb, yb) in enumerate(train_dataloader):
+            loss = loss_batch(model, loss_function, xb, yb, optimizer)
+            if i % 100 == 0:
+                mlflow.log_metric("batch_loss", value=loss)
+
+        model.eval()
+        with torch.no_grad():
+            train_loss = np.mean(
+                [
+                    loss_batch(model, loss_function, xb, yb)
+                    for xb, yb in train_dataloader
+                ]
             )
-            mlflow.log_metrics(metrics=metrics, step=epoch)
+            valid_loss = np.mean(
+                [loss_batch(model, loss_function, xb, yb) for xb, yb in val_dataloader]
+            )
+            write_scalars(
+                {
+                    "train_loss": float(train_loss),
+                    "valid_loss": float(valid_loss),
+                },
+                epoch,
+            )
 
-        # training config
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        write_2d_embedding_weights(model.shop_embedding, "shop", epoch)
+        write_2d_embedding_weights(model.item_embedding, "item", epoch)
 
-        # get dataset
-        dataset = SalesDataset(readers.items_by_month())
+    # add_graph() will trace the sample input through your model,
+    # and render it as a graph.
+    writer.add_graph(model, xb)
+    writer.flush()
 
-        # split dateset
-        n_train = int(len(dataset) * train_split)
-        n_test = len(dataset) - n_train
-        train_dataset, test_dataset = random_split(dataset, [n_train, n_test])
+    # Upload the TensorBoard event logs as a run artifact
+    print("Uploading TensorBoard events as a run artifact...")
+    mlflow.log_artifacts(output_dir, artifact_path="events")
+    print(
+        "\nLaunch TensorBoard with:\n\n"
+        f"tensorboard --logdir={os.path.join(mlflow.get_artifact_uri(), 'events')}"
+    )
 
-        # dataloader
-        train_dataloader = SalesDataloader(
-            device, DataLoader(train_dataset, batch_size=batch_size, pin_memory=True)
-        )
-        val_dataloader = SalesDataloader(
-            device, DataLoader(test_dataset, batch_size=batch_size, pin_memory=True)
-        )
+    # Log the model as an artifact of the MLflow run.
+    print("\nLogging the trained model as a run artifact...")
+    mlflow.pytorch.log_model(
+        model,
+        artifact_path="pytorch-model",
+        pickle_module=pickle,
+    )
+    print(
+        f"\nThe model is logged at: {os.path.join(mlflow.get_artifact_uri(), 'pytorch-model')}"
+    )
 
-        # get network
-        model = Network(
-            shop_embedding_dim=2,
-            item_embedding_dim=2,
-            hidden_dim=6,
-            dense_dim=6,
-        ).to(device)
-
-        # get optimizer and link with network params
-        optimizer = optim.Adam(model.parameters(), lr=1e-3)
-
-        # train loop
-        for epoch in range(epochs):
-            model.train()
-            for i, (xb, yb) in enumerate(train_dataloader):
-                loss = loss_batch(model, loss_function, xb, yb, optimizer)
-                if i % 100 == 0:
-                    mlflow.log_metric("batch_loss", value=loss)
-
-            model.eval()
-            with torch.no_grad():
-                train_loss = np.mean(
-                    [
-                        loss_batch(model, loss_function, xb, yb)
-                        for xb, yb in train_dataloader
-                    ]
-                )
-                valid_loss = np.mean(
-                    [
-                        loss_batch(model, loss_function, xb, yb)
-                        for xb, yb in val_dataloader
-                    ]
-                )
-                write_scalars(
-                    {
-                        "train_loss": float(train_loss),
-                        "valid_loss": float(valid_loss),
-                    },
-                    epoch,
-                )
-
-            write_2d_embedding_weights(model.shop_embedding, "shop", epoch)
-            write_2d_embedding_weights(model.item_embedding, "item", epoch)
-
-        # add_graph() will trace the sample input through your model,
-        # and render it as a graph.
-        writer.add_graph(model, xb)
-        writer.flush()
-
-        # Upload the TensorBoard event logs as a run artifact
-        print("Uploading TensorBoard events as a run artifact...")
-        mlflow.log_artifacts(output_dir, artifact_path="events")
-        print(
-            "\nLaunch TensorBoard with:\n\n"
-            f"tensorboard --logdir={os.path.join(mlflow.get_artifact_uri(), 'events')}"
-        )
-
-        # Log the model as an artifact of the MLflow run.
-        print("\nLogging the trained model as a run artifact...")
-        mlflow.pytorch.log_model(
-            model,
-            artifact_path="pytorch-model",
-            pickle_module=pickle,
-        )
-        print(
-            f"\nThe model is logged at: {os.path.join(mlflow.get_artifact_uri(), 'pytorch-model')}"
-        )
+    mlflow.end_run()
 
 
 if __name__ == "__main__":
